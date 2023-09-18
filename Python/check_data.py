@@ -61,8 +61,76 @@ class OutlierDetector:
         z_score = stats.zscore(self.y)
         return z_score[i] > 2
     
-        
+
+def find_outlier_sequences(df, window=180):
+    """ For each window of time calculate each feature's
+    - standard deviation (std(values)) (float)
+    - mean (mean(values)) (float)
     
+    We then have a matrix of shape (len(df)/window, 2*len(df.columns))
+    where each row is a window of time and the columns contain the standard deviations and means of each feature
+    
+    Then for each feature
+    - Calculate the global standard deviation
+    - Calculate the global mean
+    
+    Then for each windowed feature (w_i, x_i)):
+    - Check if the standard deviation or mean is greater than the global standard deviation or global mean of the feature
+    """
+    df = df.drop(columns=['date'])
+    # Create a matrix of shape (len(df)/window, 2*len(df.columns))
+    # where each row is a window of time and the columns contain the standard deviations and means of each feature
+    windowed_features = np.zeros((len(df)//window, 2*len(df.columns)))
+    for i in range(len(df)//window):
+        # Get the window of time
+        window_df = df.iloc[i*window:(i+1)*window]
+        # Get the standard deviations and means of each feature
+        stds = window_df.std()
+        means = window_df.mean()
+        # Add the standard deviations and means to the windowed_features matrix
+        windowed_features[i,:len(df.columns)] = stds
+        windowed_features[i,len(df.columns):] = means
+    # Calculate the global standard deviation and mean for each feature
+    global_stds = df.std()
+    global_stds_std = global_stds.std()
+    global_stds_mean = global_stds.mean()
+    global_means = df.mean()
+    global_means_std = global_means.std()
+    global_means_mean = global_means.mean()
+    # Check if the standard deviation or mean of a window is more than 2 standard deviations away from the global standard deviation or mean
+    # If so, then we consider the window an outlier
+    window_stats_std = []
+    window_stats_mean = []
+    for i in range(len(windowed_features)):
+        mean_z_scores = []
+        std_z_scores = []
+        for j in range(len(df.columns)):
+            # Check if the standard deviation or mean is more than 2 standard deviations away from the global standard deviation or mean
+            std = windowed_features[i,j]
+            mean = windowed_features[i,j+len(df.columns)]
+            z_mean = (mean - global_means_mean)/global_means_std
+            z_std = (std - global_stds_mean)/global_stds_std
+            mean_z_scores.append(z_mean)
+            std_z_scores.append(z_std)
+        # Save the z scores for each window and feature
+        window_stats_mean.append(mean_z_scores)
+        window_stats_std.append(std_z_scores)
+    # Convert to numpy arrays
+    window_stats_mean = np.array(window_stats_mean)
+    window_stats_std = np.array(window_stats_std)
+    # Check each row, and if the average Z-score is > 2, then we consider the window an outlier
+    outlier_windows = []
+    for i in range(len(window_stats_mean)):
+        z_scores = window_stats_mean[i]
+        mean_z_score = np.mean(z_scores)
+        if max(z_scores) > 4 or mean_z_score > 0.75:
+            outlier_windows.append(i)
+    # Print the results
+    print(f"Number of outlier windows: {len(outlier_windows)}")
+    print(f"Number of windows: {len(windowed_features)}")
+    print(f"Percentage of outlier windows: {len(outlier_windows)/len(windowed_features)*100:.2f}%")
+    plt.show()
+    return outlier_windows
         
         
             
@@ -101,19 +169,23 @@ def basic_visualize(df, histograms=False, scatterplots=False, save=True):
             sns.histplot(df[col], ax=ax_,legend=col)
     plt.show()
     
-def visualize_timeseries(df, save=True):
-    """ Plot the timeseries data
+def visualize_timeseries(df, save=True, outlier_indices = [], window_size = 180):
+    """ Plot the timeseries data.
+    If outlier_indices is not empty, then plot the outliers in red.
     """
     # Plot the timeseries for each column
     fig,ax = plt.subplots(5,5)
-    print(f"Subplot size: {(5,5)}")
+    # Divide the data into windows of size window_size
     for col_idx, col in enumerate(df.columns):
-        print(col)
-        ax_ = ax[col_idx//5, col_idx%5]
-        ax_.plot(df['date'], df[col])
+        if col == 'date':
+            continue
+        ax_ : plt.Axes = ax[col_idx//5, col_idx%5]
+        ax_.plot(df[col])
         ax_.set_title(col)
+        # Plot the outliers in red
+        for outlier_idx in outlier_indices:
+            ax_.axvspan(outlier_idx*window_size, (outlier_idx+1)*window_size, facecolor='r', alpha=0.5)
     plt.show()
-    return
 
 def convolve_series_confidence_interval(series, window_size, return_series=False):
     """ Convolve a time series with a window_size convolution kernel.
@@ -167,11 +239,12 @@ def remove_dates(df, ret_good_indices=False):
 
 if __name__ == "__main__":
     df = load_to_dataframe(remove_first_days=True)
-    df = remove_dates(df)
+    #df = remove_dates(df)
+    outlier_indxs = find_outlier_sequences(df, window = 1800)
     basic_check_data(df)
     #check_data_timeseries(df)
     #basic_visualize(df, histograms=True, scatterplots=False, save=True)
-    visualize_timeseries(df, save=True)
+    visualize_timeseries(df, save=True, outlier_indices=outlier_indxs, window_size=1800)
     #visualize_convolved_df(df, 1000, save=True)
     
     
