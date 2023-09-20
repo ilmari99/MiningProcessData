@@ -11,58 +11,7 @@ from load_data import load_to_dataframe
 from scipy import stats
 import pandas as pd
 
-class OutlierDetector:
-    def __init__(self, df, X,y):
-        """ X contains a sequence of vectors (181 measurements in one hour)
-        Each X_i is a 180x24 matrix
-        X_i is considered an outlier if y_i is an outlier
-        """
-        self.df = df
-        self.X = X
-        self.y = y
-        #self.similarity_matrix = self.calc_sequence_similarity_matrix()
-        #print(f"Shape of similarity matrix: {self.similarity_matrix.shape}")
-        # Save as excel file
-        #pd.DataFrame(self.similarity_matrix).to_excel("similarity_matrix.xlsx")
-        
-    
-    def calc_sequence_similarity_matrix(self):
-        """ Calculate the similarity matrix for the sequences
-        """
-        self.similarity_matrix = np.zeros((len(self.X), len(self.X)))
-        todo = len(self.X)**2
-        print(f"Calculating similarity matrix for {todo} pairs of sequences")
-        for i in range(len(self.X)):
-            # Calculate the similarity between X_i and X_j
-            for j in range(len(self.X)):
-                if j % 100 == 0:
-                    print(f"Progress: {i*len(self.X)+j}/{todo}")
-                # Calculate the similarity between X_i and X_j
-                similarity = self.calc_sequence_similarity(self.X[i], self.X[j])
-                # Add the similarity to the similarity matrix
-                self.similarity_matrix[i,j] = similarity
-    
-    def calc_sequence_similarity(self, X_i, X_j):
-        """ Calculate the similarity between two matrices consisiting of rows using Kullback-Leibler divergence
-        """
-        
-        # Calculate the similarity between X_i and X_j
-        similarity = 0
-        for row_i in X_i:
-            for row_j in X_j:
-                similarity += stats.entropy(row_i, row_j)
-        return similarity
-    
-    def is_sequence_outlier(self, i):
-        """ Return True if the matrix (sequence) is an outlier.
-        """
-        # For now we just do this by considering the z-score of the silica concentration
-        # If the z-score is > 3, then we consider the sequence an outlier
-        z_score = stats.zscore(self.y)
-        return z_score[i] > 2
-    
-
-def find_outlier_sequences(df, window=180):
+def find_outlier_sequences(df, window=180,outlier_mask=None):
     """ For each window of time calculate each feature's
     - standard deviation (std(values)) (float)
     - mean (mean(values)) (float)
@@ -105,7 +54,6 @@ def find_outlier_sequences(df, window=180):
         mean_z_scores = []
         std_z_scores = []
         for j in range(len(df.columns)):
-            # Check if the standard deviation or mean is more than 2 standard deviations away from the global standard deviation or mean
             std = windowed_features[i,j]
             mean = windowed_features[i,j+len(df.columns)]
             z_mean = (mean - global_means_mean)/global_means_std
@@ -118,23 +66,44 @@ def find_outlier_sequences(df, window=180):
     # Convert to numpy arrays
     window_stats_mean = np.array(window_stats_mean)
     window_stats_std = np.array(window_stats_std)
-    # Check each row, and if the average Z-score is > 2, then we consider the window an outlier
+    # Check each row from window_stats_mean and window_stats_std and classify in to outliers using Mahalanobis distance
     outlier_windows = []
-    for i in range(len(window_stats_mean)):
-        z_scores = window_stats_mean[i]
-        mean_z_score = np.mean(z_scores)
-        if max(z_scores) > 4 or mean_z_score > 0.75:
-            outlier_windows.append(i)
+    for window_idx in range(len(window_stats_mean)):
+        # Get the z-scores for each feature
+        z_scores_mean = window_stats_mean[window_idx]
+        z_scores_std = window_stats_std[window_idx]
+        # Calculate the Mahalanobis distance
+        mean_mahalanobis_distance = np.sqrt(np.sum(z_scores_mean**2))
+        std_mahalanobis_distance = np.sqrt(np.sum(z_scores_std**2))
+        # If the Mahalanobis distance is greater than 3, then we consider the window an outlier
+        if mean_mahalanobis_distance > 6 or std_mahalanobis_distance > 6:
+            outlier_windows.append(window_idx)
     # Print the results
     print(f"Number of outlier windows: {len(outlier_windows)}")
     print(f"Number of windows: {len(windowed_features)}")
     print(f"Percentage of outlier windows: {len(outlier_windows)/len(windowed_features)*100:.2f}%")
     plt.show()
     return outlier_windows
-        
-        
-            
-        
+
+def compute_outlier_mask(df, outlier_z_thresh = 3, return_abs_z_scores=False):
+    """ Return a dataframe with True values at indices of outliers, and False else where
+    """
+    has_date = 'date' in df.columns
+    if has_date:
+        df = df.drop(columns=['date'])
+    # Compute the z-scores for each feature
+    z_scores = stats.zscore(df)
+    # Compute the absolute z-scores
+    abs_z_scores = np.abs(z_scores)
+    # Create a mask, same ssize as df, with True values at indices of outliers, and False else where
+    outlier_mask = abs_z_scores > outlier_z_thresh
+    if has_date:
+        # insert the date column (only False values)
+        outlier_mask = np.insert(outlier_mask, 0, False, axis=1)
+    if return_abs_z_scores:
+        return outlier_mask, abs_z_scores
+    return outlier_mask
+
 
 def basic_check_data(df):
     """ Check the data for missing values
@@ -184,67 +153,93 @@ def visualize_timeseries(df, save=True, outlier_indices = [], window_size = 180)
         ax_.set_title(col)
         # Plot the outliers in red
         for outlier_idx in outlier_indices:
-            ax_.axvspan(outlier_idx*window_size, (outlier_idx+1)*window_size, facecolor='r', alpha=0.5)
+            ax_.axvspan(outlier_idx*window_size, (outlier_idx+1)*window_size, color='red', alpha=0.5)
     plt.show()
 
-def convolve_series_confidence_interval(series, window_size, return_series=False):
-    """ Convolve a time series with a window_size convolution kernel.
-    Return the confidence interval of the convoluted series.
-    """
-    # Convolve the series with a window_size convolution kernel
-    convolved_series = np.convolve(series, np.ones(window_size)/window_size, mode='valid')
-    # Calculate the confidence interval of the convolved series
-    convolved_series_std = np.std(convolved_series)
-    convolved_series_confidence_interval = 1.96 * convolved_series_std / np.sqrt(len(convolved_series))
-    if return_series:
-        return convolved_series, convolved_series_confidence_interval
-    return convolved_series_confidence_interval
 
-def visualize_convolved_df(df, window_size, save=True):
-    """ Plot the timeseries data
+def combine_to_hourly(df : pd.DataFrame, nhours=1, method = lambda group : np.mean(group, axis=0), exclude_columns=['% Silica Concentrate']):
+    """ Combine N hours of data to one row using 'method(group : np.arr) -> np.arr'
     """
-    # Plot the timeseries for each column
-    fig,ax = plt.subplots(5,5)
-    print(f"Subplot size: {(5,5)}")
-    for col_idx, col in enumerate(df.columns):
-        if col == 'date':
-            continue
-        vals, CI = convolve_series_confidence_interval(df[col], window_size, return_series=True)
-        print(f"{col} (CI={CI:.2f})")
-        ax_ : plt.Axes = ax[col_idx//5, col_idx%5]
-        ax_.plot(vals)
-        ucb = vals+CI
-        lcb = vals-CI
-        ax_.fill_between(np.arange(len(vals)), lcb, ucb)
-        ax_.set_title(f"{col} (CI={CI:.2f})")
-    plt.show()
-    return
+    # Remove the columns we don't want to apply the method to, except date
+    # We later combine these on the combined dates
+    removed_cols = df[exclude_columns + ['date']]
+    df = df.drop(columns=exclude_columns)
+    # Group the data by date
+    grouped = df.groupby(pd.Grouper(key='date', freq=f'{nhours}H'))
+    # Apply the method to each group
+    combined = grouped.apply(method)
+    # Add the removed columns back
+    # We use the first date in each group as the date for the combined row
+    combined = pd.concat([combined, removed_cols.groupby(pd.Grouper(key='date', freq=f'{nhours}H')).first()], axis=1)
+    # Remove the NaN values
+    combined = combined.dropna()
+    # Reset the index
+    combined = combined.reset_index(drop=True)
+    if "date" not in combined.columns:
+        # Add the date column
+        combined.insert(0, "date", pd.date_range(start=df['date'].min(), periods=len(combined), freq=f'{nhours}H'))
+    # Round the date to the nearest hour
+    combined['date'] = combined['date'].dt.round('H')
+    # Remove the first row if Nhours is >1
+    if nhours > 1:
+        combined = combined.iloc[1:]
+    return combined
 
-def remove_dates(df, ret_good_indices=False):
-    """ Remove time periods, where the '% Iron Feed' and '% Silica Feed' values stay the same
+def flatten_n_hours_data(df, exclude_columns = ["% Iron Feed", "% Silica Feed", "% Iron Concentrate", "% Silica Concentrate"]):
+    """ Flatten all observations from 1 hours to one row, excluding the columns measured only once per hour
     """
-    print(f"Shape of df before removing dates: {df.shape}")
-    # Remove the periods of time, where the '% Iron Feed' and '% Silica Feed' values stay the same
-    iron_diffs = df['% Iron Feed'].diff()
-    silica_diffs = df['% Silica Feed'].diff()
-    # Get the indices of the rows, where both '% Iron Feed' and '% Silica Feed' have 0 difference
-    indices = np.where((iron_diffs != 0) & (silica_diffs != 0))[0]
-    print(indices)
-    # Remove the rows with the indices
-    df = df.iloc[indices]
-    print(f"Shape of df after removing dates: {df.shape}")
-    if ret_good_indices:
-        return df, indices
-    return df
+    exclude_columns = exclude_columns + ['date']
+    # The dataframe will have 180 columns for each non-excluded column + the excluded columns
+    columns = []
+    for i in range(180):
+        for col in df.columns:
+            if col not in exclude_columns:
+                columns.append(f"{col}_{i}")
+    columns = columns + exclude_columns
+    # Create the dataframe
+    combined = pd.DataFrame(columns=columns)
+    print(combined.shape)
+    print(combined.columns)
+
+    # For each hour (180 consecutive rows)
+    for i in range(len(df)//180):
+        # Get the 180 rows from non-excluded columns
+        rows = df.iloc[i*180:(i+1)*180]
+        excluded_values = df.iloc[i*180][exclude_columns]
+        rows = rows.drop(columns=exclude_columns)
+        # Flatten the rows to one row
+        flattened_df = pd.DataFrame(rows.values.flatten()).T
+        # Add the excluded values to the row
+        flattened_df = pd.concat([flattened_df, excluded_values], columns=exclude_columns, axis=1)
+        # Add the row to the dataframe
+        combined = pd.concat([combined,flattened_df], axis=0)
+    return combined
+
+
 
 if __name__ == "__main__":
+    # ["% Iron Feed", "% Silica Feed", "% Iron Concentrate", "% Silica Concentrate"]
     df = load_to_dataframe(remove_first_days=True)
-    #df = remove_dates(df)
-    outlier_indxs = find_outlier_sequences(df, window = 1800)
-    basic_check_data(df)
-    #check_data_timeseries(df)
-    #basic_visualize(df, histograms=True, scatterplots=False, save=True)
-    visualize_timeseries(df, save=True, outlier_indices=outlier_indxs, window_size=1800)
-    #visualize_convolved_df(df, 1000, save=True)
-    
-    
+    no_change_cols = ['% Silica Concentrate', '% Iron Concentrate', '% Iron Feed', '% Silica Feed']
+    combined_hourly_means = flatten_n_hours_data(df, exclude_columns=no_change_cols)
+    #combined_hourly_means.rename(columns=lambda col : f"{col}_mean" if col not in no_change_cols else col, inplace=True)
+    #combined_hourly_maxs = combine_to_hourly(df,nhours=1, method=lambda group : np.max(group, axis=0), exclude_columns=[])
+    #combined_hourly_maxs.rename(columns=lambda col : f"{col}_max" if col not in no_change_cols else col, inplace=True)
+    #combined_hourly_mins = combine_to_hourly(df,nhours=1, method=lambda group : np.min(group, axis=0), exclude_columns=[])
+    #combined_hourly_mins.rename(columns=lambda col : f"{col}_min" if col not in no_change_cols else col, inplace=True)
+    #combined_hourly_std = combine_to_hourly(df,nhours=1, method=lambda group : np.std(group, axis=0), exclude_columns=[])
+    #combined_hourly_std.rename(columns=lambda col : f"{col}_std" if col not in no_change_cols else col, inplace=True)
+
+    combined_hourly = pd.concat([combined_hourly_means], axis=1)
+    # Remove duplicate columns, but keep 1
+    combined_hourly = combined_hourly.loc[:,~combined_hourly.columns.duplicated()]
+    # Round the values to 3 decimals
+    combined_hourly = combined_hourly.round(3)
+    print(combined_hourly.describe())
+    print(combined_hourly.head())
+    print(combined_hourly.tail())
+    outlier_mask = compute_outlier_mask(combined_hourly, outlier_z_thresh=3)
+    print(outlier_mask)
+    print(outlier_mask.shape)
+    print(outlier_mask.sum())
+    combined_hourly.to_csv('miningdata/data_flattened_hourly.csv', index=False)
