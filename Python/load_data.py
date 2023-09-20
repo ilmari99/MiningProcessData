@@ -12,6 +12,8 @@ def load_to_dataframe(remove_first_days=False):
     df = pd.read_csv('miningdata/data.csv', parse_dates=['date'], decimal=',')
     if remove_first_days:
         df = df[df['date'] > '2017-04-11']
+        # reset index
+        df = df.reset_index(drop=True)
     return df
 
 def filter_dataframe(df):
