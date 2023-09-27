@@ -28,7 +28,7 @@ def get_model(input_shape, latent_dim=128):
     x = tf.keras.layers.Dense(2*latent_dim, activation='relu',kernel_regularizer="l2")(inputs)
     x = tf.keras.layers.Dense(2*latent_dim, activation='relu')(x)
     
-    x = tf.keras.layers.Dense(latent_dim, activation='relu',name='latent_space')(x)
+    x = tf.keras.layers.Dense(latent_dim, activation='relu',name='latent_space',kernel_regularizer="l2")(x)
     
     x = tf.keras.layers.Dense(2*latent_dim, activation='relu')(x)
     x = tf.keras.layers.Dense(2*latent_dim, activation='relu')(x)
@@ -39,47 +39,71 @@ def get_model(input_shape, latent_dim=128):
     return model
 
 if __name__ == "__main__":
-    df = pd.read_csv("miningdata/data_flattened_12hourly_multishift_train.csv", parse_dates=['date'])
+    df = pd.read_csv("miningdata/12hourly_flattened_multishift_train.csv", parse_dates=['date'])
+    df_test = pd.read_csv("miningdata/12hourly_flattened_multishift_test.csv", parse_dates=['date'])
+    df_validation = pd.read_csv("miningdata/12hourly_flattened_multishift_validation.csv", parse_dates=['date'])
+    
     cols_to_drop = ["date", "% Iron Feed", "% Silica Feed", "% Iron Concentrate", "% Silica Concentrate"]
     # Get all columns, with any of the strings in cols_to_drop
     cols_to_drop = df.columns[df.columns.str.contains('|'.join(cols_to_drop))]
     df = df.drop(columns=cols_to_drop)
-
-    # Split the data into train and test sets
-    X_train, X_test = train_test_split(df, test_size=0.1, shuffle=True)
+    df_test = df_test.drop(columns=cols_to_drop)
+    df_validation = df_validation.drop(columns=cols_to_drop)
+    
+    X_train = df
+    X_test = df_test
+    X_val = df_validation
 
     # Scale the data
     scaler = StandardScaler()
     X_train = scaler.fit_transform(X_train)
     X_test = scaler.transform(X_test)
+    X_val = scaler.transform(X_val)
+    
     # Set outliers to -1
     X_train = pd.DataFrame(X_train)
     X_test = pd.DataFrame(X_test)
+    X_val = pd.DataFrame(X_val)
     xtrain_outlier_mask = compute_outlier_mask(X_train, outlier_z_thresh=3.5)
     print(f"Number of outliers in train set:\n{sum(xtrain_outlier_mask.sum())}")
     #X_train[xtrain_outlier_mask] = -1
     #X_test[xtest_outlier_mask] = -1
+    
+    # Shuffle train set
+    X_train = X_train.sample(frac=1)
 
     Y_train = X_train.copy()
     Y_test = X_test.copy()
+    Y_val = X_val.copy()
     Y_train[xtrain_outlier_mask] = -1
-
-    model = get_model(input_shape=(X_train.shape[1],), latent_dim=256)
+    
+    model = get_model(input_shape=(X_train.shape[1],), latent_dim=128)
     model.summary()
     
-    early_stop = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+    early_stop = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=20, restore_best_weights=True)
     tensorboard = tf.keras.callbacks.TensorBoard(log_dir="tblogs", histogram_freq=1)
     
     
-    model.fit(X_train, Y_train, epochs=1000, batch_size=32, validation_data=(X_test, Y_test), callbacks=[early_stop, tensorboard])
+    model.fit(X_train, Y_train, epochs=1000, batch_size=32, validation_data=(X_val, Y_val), callbacks=[early_stop, tensorboard])
+    
+    # Evaluate the model
+    y_pred = model.predict(X_test)
+    y_true = Y_test
+    mse = mean_squared_error(y_true, y_pred)
+    mae = mean_absolute_error(y_true, y_pred)
+    r2 = r2_score(y_true, y_pred)
+    print(f"Test set MSE: {mse}")
+    print(f"Test set MAE: {mae}")
+    print(f"Test set R2: {r2}")
+    
     
     encoder = tf.keras.Model(inputs=model.input, outputs=model.get_layer('latent_space').output)
     encoder.summary()
-    encoder.save("models/encoder_hourly_256.h5")
+    encoder.save("models/encoder_12hourly_128_sm.h5")
     
     decoder = tf.keras.Model(inputs=model.get_layer('latent_space').output, outputs=model.output)
     decoder.summary()
-    decoder.save("models/decoder_hourly_256.h5")
+    decoder.save("models/decoder_12hourly_128_sm.h5")
 
     
 
