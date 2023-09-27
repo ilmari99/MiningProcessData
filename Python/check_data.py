@@ -10,7 +10,7 @@ from sklearn.discriminant_analysis import StandardScaler
 import tensorflow as tf
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
-from load_data import load_to_dataframe
+from load_data import load_to_dataframe, train_test_validation_split_sequence
 from scipy import stats
 import pandas as pd
 
@@ -273,37 +273,69 @@ def combine_heuristically(df):
     
     combined_hourly = pd.concat([hourly_means, hourly_maxs, hourly_mins, hourly_std], axis=1)
     combined_hourly = combined_hourly.loc[:,~combined_hourly.columns.duplicated()]
+    # Put the stationary columns first
+    combined_hourly = combined_hourly[STATIONARY_COLUMNS + [col for col in combined_hourly.columns if col not in STATIONARY_COLUMNS]]
     
     return combined_hourly
 
 def combine_to_latent_space(df, nhours=1, shifts=0):
-    model = tf.keras.models.load_model("models/encoder_hourly_256.h5")
+    model = tf.keras.models.load_model("models/encoder_12hourly_64.h5")
     combined_hourly,scaler = combine_hourly_to_latent_space(df, model,nhours=nhours, exclude_columns=STATIONARY_COLUMNS, shifts=shifts)
     return combined_hourly
 
+def print_df_info(df):
+    print(f"Shape of df: {df.shape}")
+    print(f"Columns of df: {df.columns}")
+    print(f"Data types of df: {df.dtypes}")
+    print(f"Describe of df: {df.describe()}")
+    print(f"Head of df: {df.head()}")
+    print(f"Tail of df: {df.tail()}")
+    return
+
+def combine_heuristically():
+    df, test_df, validation_df = train_test_validation_split_sequence("miningdata/data.csv",keep_stagnant=True)
+    
+    train_combined_heuristically = combine_heuristically(df)
+    test_combined_heuristically = combine_heuristically(test_df)
+    validation_combined_heuristically = combine_heuristically(validation_df)
+    
+    # Save the dataframes to csv files
+    train_combined_heuristically.to_csv(f"miningdata/1hourly_heuristic_train.csv", index=False)
+    test_combined_heuristically.to_csv(f"miningdata/1hourly_heuristic_test.csv", index=False)
+    validation_combined_heuristically.to_csv(f"miningdata/1hourly_heuristic_validation.csv", index=False)
+    
+def flatten_nhours():
+    df, test_df, validation_df = train_test_validation_split_sequence("miningdata/data.csv",keep_stagnant=True)
+
+    nhours = 12
+    shifts = nhours -1
+    
+    train_flattened = flatten_n_hours_with_shifts(df, nhours=nhours, shifts=shifts, directly_to_file=f"miningdata/{nhours}hourly_flattened_multishift_train.csv")
+    test_flattened = flatten_n_hours_with_shifts(test_df, nhours=nhours, shifts=shifts, directly_to_file=f"miningdata/{nhours}hourly_flattened_multishift_test.csv")
+    validation_flattened = flatten_n_hours_with_shifts(validation_df, nhours=nhours, shifts=shifts, directly_to_file=f"miningdata/{nhours}hourly_flattened_multishift_validation.csv")
+ 
+
 
 if __name__ == "__main__":
+    #df, test_df, validation_df = train_test_validation_split_sequence("miningdata/data.csv",keep_stagnant=True)
+    #df = pd.read_csv("miningdata/1hourly_flattened_multishift_train.csv", parse_dates=['date'])
+    #test_df = pd.read_csv("miningdata/1hourly_flattened_multishift_test.csv", parse_dates=['date'])
+    #validation_df = pd.read_csv("miningdata/1hourly_flattened_multishift_validation.csv", parse_dates=['date'])
+
     
-    df = load_to_dataframe('miningdata/data_test.csv',remove_first_days=True)
-    #df = df.iloc[:2*18000]
-    nhours = 12
+    df_combined_latent_space = combine_to_latent_space("miningdata/12hourly_flattened_multishift_train.csv", nhours=12, shifts=0)
+    df_test_combined_latent_space = combine_to_latent_space("miningdata/12hourly_flattened_multishift_test.csv", nhours=12, shifts=0)
+    df_validation_combined_latent_space = combine_to_latent_space("miningdata/12hourly_flattened_multishift_validation.csv", nhours=12, shifts=0)
     
-    combined_hourly = combine_to_latent_space(df, nhours=nhours, shifts=0)
+    df_combined_latent_space.to_csv("miningdata/12hourly_latent64_train.csv", index=False)
+    df_test_combined_latent_space.to_csv("miningdata/12hourly_latent64_test.csv", index=False)
+    df_validation_combined_latent_space.to_csv("miningdata/12hourly_latent64_validation.csv", index=False)
+    
+    
+    #assert train_flattened.shape[1] == 19*nhours*180 + nhours*4 + 1, f"Expected {19*nhours*180 + nhours*4 + 1} columns, got {train_flattened.shape[1]}"
+    
     #combined_hourly = combine_to_latent_space("miningdata/data_flattened_12hourly_multishift_train.csv", nhours=nhours, shifts=0)
     
     #combined_hourly = flatten_n_hours_with_shifts(df, nhours=nhours, shifts=nhours-1)
-    #assert combined_hourly.shape[1] == 19*nhours*180 + nhours*4 + 1, f"Expected {19*nhours*180 + nhours*4 + 1} columns, got {combined_hourly.shape[1]}"
     
-    # Round the values to 3 decimals
-    #combined_hourly = combined_hourly.round(3)
-    print(combined_hourly.shape)
-    print(combined_hourly.columns)
-    print(combined_hourly.describe())
-    print(combined_hourly.head())
-    print(combined_hourly.tail())
-    outlier_mask = compute_outlier_mask(combined_hourly, outlier_z_thresh=3)
-    print(outlier_mask)
-    print(outlier_mask.shape)
-    print(outlier_mask.sum())
-    
-    combined_hourly.to_csv('miningdata/data_combined_12hourly_multishift_latent256_test.csv', index=False)
+    #combined_hourly.to_csv('miningdata/data_combined_12hourly_multishift_latent256_test.csv', index=False)
