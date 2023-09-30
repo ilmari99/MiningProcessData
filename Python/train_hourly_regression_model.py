@@ -15,12 +15,12 @@ from load_data import remove_sus_period
 
 SHUFFLE_TRAIN = True
 APPLY_PCA = False
-NHOURS = 12
+NHOURS = 1
 
-df = pd.read_csv(f"miningdata/{NHOURS}hourly_latent64_train.csv", parse_dates=['date'])
-df_validation = pd.read_csv(f"miningdata/{NHOURS}hourly_latent64_validation.csv", parse_dates=['date'])
-df = remove_sus_period(df)
-df_test = pd.read_csv(f"miningdata/{NHOURS}hourly_latent64_test.csv", parse_dates=['date'])
+df = pd.read_csv(f"miningdata/{NHOURS}hourly_heuristic_train.csv", parse_dates=['date'])
+df_validation = pd.read_csv(f"miningdata/{NHOURS}hourly_heuristic_validation.csv", parse_dates=['date'])
+#df = remove_sus_period(df)
+df_test = pd.read_csv(f"miningdata/{NHOURS}hourly_heuristic_test.csv", parse_dates=['date'])
 
 df = pd.concat([df, df_validation])
 # Only take every Nth row
@@ -33,11 +33,11 @@ exclude_cols = ['% Iron Feed', '% Silica Feed', '% Iron Concentrate', '% Silica 
 df = df.drop(columns=["date"])
 df_test = df_test.drop(columns=["date"])
 
-silica_conc_idx = df.columns.get_loc(f"% Silica Concentrate_{NHOURS-1}")
+silica_conc_idx = df.columns.get_loc(f"% Silica Concentrate{'_' + str(NHOURS-1) if NHOURS > 1 else ''}")
 
 outlier_mask = compute_outlier_mask(df, outlier_z_thresh=4)
 print(f"Number of outliers:\n{outlier_mask.sum()}")
-df = df[~outlier_mask.any(axis=1)]
+#df = df[~outlier_mask.any(axis=1)]
 
 # Split the data into train and test sets
 X_train = df
@@ -117,14 +117,15 @@ silica_abs_change = np.abs(np.diff(y_test))
 mean_abs_change = np.mean(silica_abs_change)
 print(f"Mean absolute change in silica concentrate in {NHOURS}: {mean_abs_change:.2f}")
 
-# Calculate the mean change in just 1 hour
-silica_concentrate_index_0 = df.columns.get_loc(f"% Silica Concentrate_0")
-silica_concentrate_index_1 = df.columns.get_loc(f"% Silica Concentrate_1")
-# Difference in each row between the silica concentrate at hour 0 and 1
-silica_concentrate_diff = df.iloc[:, silica_concentrate_index_1] - df.iloc[:, silica_concentrate_index_0]
-# Mean change in silica concentrate in 1 hour
-mean_change = np.mean(np.abs(silica_concentrate_diff))
-print(f"Mean change in silica concentrate in 1 hour: {mean_change:.2f}")
+if NHOURS > 1:
+    # Calculate the mean change in just 1 hour
+    silica_concentrate_index_0 = df.columns.get_loc(f"% Silica Concentrate_0")
+    silica_concentrate_index_1 = df.columns.get_loc(f"% Silica Concentrate_1")
+    # Difference in each row between the silica concentrate at hour 0 and 1
+    silica_concentrate_diff = df.iloc[:, silica_concentrate_index_1] - df.iloc[:, silica_concentrate_index_0]
+    # Mean change in silica concentrate in 1 hour
+    mean_change = np.mean(np.abs(silica_concentrate_diff))
+    print(f"Mean change in silica concentrate in 1 hour: {mean_change:.2f}")
 
 
 

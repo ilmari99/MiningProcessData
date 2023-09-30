@@ -279,7 +279,7 @@ def combine_heuristically(df):
     return combined_hourly
 
 def combine_to_latent_space(df, nhours=1, shifts=0):
-    model = tf.keras.models.load_model("models/encoder_12hourly_64.h5")
+    model = tf.keras.models.load_model("models/encoder_1hourly_32.h5")
     combined_hourly,scaler = combine_hourly_to_latent_space(df, model,nhours=nhours, exclude_columns=STATIONARY_COLUMNS, shifts=shifts)
     return combined_hourly
 
@@ -313,7 +313,6 @@ def flatten_nhours():
     train_flattened = flatten_n_hours_with_shifts(df, nhours=nhours, shifts=shifts, directly_to_file=f"miningdata/{nhours}hourly_flattened_multishift_train.csv")
     test_flattened = flatten_n_hours_with_shifts(test_df, nhours=nhours, shifts=shifts, directly_to_file=f"miningdata/{nhours}hourly_flattened_multishift_test.csv")
     validation_flattened = flatten_n_hours_with_shifts(validation_df, nhours=nhours, shifts=shifts, directly_to_file=f"miningdata/{nhours}hourly_flattened_multishift_validation.csv")
- 
 
 
 if __name__ == "__main__":
@@ -323,13 +322,13 @@ if __name__ == "__main__":
     #validation_df = pd.read_csv("miningdata/1hourly_flattened_multishift_validation.csv", parse_dates=['date'])
 
     
-    df_combined_latent_space = combine_to_latent_space("miningdata/12hourly_flattened_multishift_train.csv", nhours=12, shifts=0)
-    df_test_combined_latent_space = combine_to_latent_space("miningdata/12hourly_flattened_multishift_test.csv", nhours=12, shifts=0)
-    df_validation_combined_latent_space = combine_to_latent_space("miningdata/12hourly_flattened_multishift_validation.csv", nhours=12, shifts=0)
+    df_combined_latent_space = combine_to_latent_space("miningdata/1hourly_flattened_multishift_train.csv", nhours=1, shifts=0)
+    df_test_combined_latent_space = combine_to_latent_space("miningdata/1hourly_flattened_multishift_test.csv", nhours=1, shifts=0)
+    df_validation_combined_latent_space = combine_to_latent_space("miningdata/1hourly_flattened_multishift_validation.csv", nhours=1, shifts=0)
     
-    df_combined_latent_space.to_csv("miningdata/12hourly_latent64_train.csv", index=False)
-    df_test_combined_latent_space.to_csv("miningdata/12hourly_latent64_test.csv", index=False)
-    df_validation_combined_latent_space.to_csv("miningdata/12hourly_latent64_validation.csv", index=False)
+    df_combined_latent_space.to_csv("miningdata/1hourly_latent32_train.csv", index=False)
+    df_test_combined_latent_space.to_csv("miningdata/1hourly_latent32_test.csv", index=False)
+    df_validation_combined_latent_space.to_csv("miningdata/1hourly_latent32_validation.csv", index=False)
     
     
     #assert train_flattened.shape[1] == 19*nhours*180 + nhours*4 + 1, f"Expected {19*nhours*180 + nhours*4 + 1} columns, got {train_flattened.shape[1]}"

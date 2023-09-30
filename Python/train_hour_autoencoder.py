@@ -25,13 +25,13 @@ def get_model(input_shape, latent_dim=128):
 
     """
     inputs = tf.keras.layers.Input(shape=input_shape)
-    x = tf.keras.layers.Dense(2*latent_dim, activation='relu',kernel_regularizer="l2")(inputs)
+    x = tf.keras.layers.Dense(4*latent_dim, activation='relu',kernel_regularizer="l2")(inputs)
     x = tf.keras.layers.Dense(2*latent_dim, activation='relu')(x)
     
     x = tf.keras.layers.Dense(latent_dim, activation='relu',name='latent_space',kernel_regularizer="l2")(x)
     
     x = tf.keras.layers.Dense(2*latent_dim, activation='relu')(x)
-    x = tf.keras.layers.Dense(2*latent_dim, activation='relu')(x)
+    x = tf.keras.layers.Dense(4*latent_dim, activation='relu')(x)
     
     outputs = tf.keras.layers.Dense(input_shape[0], activation='relu')(x)
     model = tf.keras.Model(inputs=inputs, outputs=outputs)
@@ -39,9 +39,9 @@ def get_model(input_shape, latent_dim=128):
     return model
 
 if __name__ == "__main__":
-    df = pd.read_csv("miningdata/12hourly_flattened_multishift_train.csv", parse_dates=['date'])
-    df_test = pd.read_csv("miningdata/12hourly_flattened_multishift_test.csv", parse_dates=['date'])
-    df_validation = pd.read_csv("miningdata/12hourly_flattened_multishift_validation.csv", parse_dates=['date'])
+    df = pd.read_csv("miningdata/1hourly_flattened_multishift_train.csv", parse_dates=['date'])
+    df_test = pd.read_csv("miningdata/1hourly_flattened_multishift_test.csv", parse_dates=['date'])
+    df_validation = pd.read_csv("miningdata/1hourly_flattened_multishift_validation.csv", parse_dates=['date'])
     
     cols_to_drop = ["date", "% Iron Feed", "% Silica Feed", "% Iron Concentrate", "% Silica Concentrate"]
     # Get all columns, with any of the strings in cols_to_drop
@@ -77,7 +77,7 @@ if __name__ == "__main__":
     Y_val = X_val.copy()
     Y_train[xtrain_outlier_mask] = -1
     
-    model = get_model(input_shape=(X_train.shape[1],), latent_dim=128)
+    model = get_model(input_shape=(X_train.shape[1],), latent_dim=32)
     model.summary()
     
     early_stop = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=20, restore_best_weights=True)
@@ -96,14 +96,13 @@ if __name__ == "__main__":
     print(f"Test set MAE: {mae}")
     print(f"Test set R2: {r2}")
     
-    
     encoder = tf.keras.Model(inputs=model.input, outputs=model.get_layer('latent_space').output)
     encoder.summary()
-    encoder.save("models/encoder_12hourly_128_sm.h5")
+    encoder.save("models/encoder_1hourly_32.h5")
     
     decoder = tf.keras.Model(inputs=model.get_layer('latent_space').output, outputs=model.output)
     decoder.summary()
-    decoder.save("models/decoder_12hourly_128_sm.h5")
+    decoder.save("models/decoder_1hourly_32.h5")
 
     
 
