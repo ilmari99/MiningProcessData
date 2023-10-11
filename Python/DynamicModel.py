@@ -40,7 +40,7 @@ class DynamicModel:
     - _data_to_predictive_data(self, sensor_data, lab_data, include_labels = False,hour_skips=0): Converts two dataframes of sensor and lab data to the format used by the predictive model.
     """
 class DynamicModel(ABC):
-    def __init__(self, NHOURS=12, update_freg_h = 24, verbose=0, max_samples=8000, model=None):
+    def __init__(self, NHOURS=12, update_freg_h = 24, verbose=0, max_samples=8000, model=None, reset_after_update=False):
         self.NHOURS = NHOURS
         self.lab_columns = ['% Silica Concentrate', "% Iron Concentrate", "% Iron Feed", "% Silica Feed"]
         self.verbose = verbose
@@ -50,6 +50,7 @@ class DynamicModel(ABC):
         self.max_samples = max_samples
         self.X_normalizer = StandardScaler()
         self.Y_normalizer = StandardScaler()
+        self.reset_after_update = reset_after_update
         
         # The 20 second data received from the sensors
         self.X_received = pd.DataFrame()
@@ -131,8 +132,14 @@ class DynamicModel(ABC):
         #print(f"X columns: {xcolumns}")
         #print(f"Y columns: {ycolumns}")
         
-        self.X = pd.DataFrame(columns=[lab_columns + sensor_columns]) 
+        self.X = pd.DataFrame(columns=lab_columns + sensor_columns) 
         self.Y = pd.DataFrame(columns=self.lab_columns[0:2])
+
+        self.X_full_columns = self.X.columns.values.tolist()
+
+        self.X = self._dimension_reduction(self.X)
+        print(f"X columns: {self.X.columns}")
+        print(f"Y columns: {self.Y.columns}")
         
     
     def add_data_to_XY(self, sensor_data, lab_data):
@@ -202,8 +209,9 @@ class DynamicModel(ABC):
             
             # So we have NHOURS of sensor data, but only NHOURS-1 of lab data
             past_nhours = np.concatenate([past_lab_flattened, past_sensor_data_flattened], axis=0)
-            past_nhours = pd.DataFrame(past_nhours.reshape(1, -1), columns=self.X.columns)
+            past_nhours = pd.DataFrame(past_nhours.reshape(1, -1), columns=self.X_full_columns)
             pred_df = pd.concat([pred_df, past_nhours], axis=0, ignore_index=True)
+        pred_df = self._dimension_reduction(pred_df)
         if include_labels:
             return pred_df, target_df
         return pred_df
@@ -219,6 +227,7 @@ class DynamicModel(ABC):
         # Flatten the data
         predictive_data = self._data_to_predictive_data(sensor_window, lab_window)
         predictive_data = self.X_normalizer.transform(predictive_data)
+        predictive_data = pd.DataFrame(predictive_data, columns=self.X.columns)
         # Predict
         Y_preds = self._predict(predictive_data)
         Y_preds = self.Y_normalizer.inverse_transform(Y_preds)
@@ -276,7 +285,7 @@ class DynamicModel(ABC):
                 # Shhift the Y_window by one hour, so that the latest lab measurement is one hour ago
                 Y_window = self.Y_received.iloc[-self.NHOURS - 2:-1, :]
 
-                print(f"Adding data to X and Y with {X_window.shape} X and {Y_window.shape} Y")
+                print(f"Adding data to X and Y with windows {X_window.shape} X and {Y_window.shape} Y")
                 self.add_data_to_XY(X_window, Y_window)
         
         print(f"Prev Y size: {self.__prev_Y_size}")
@@ -304,17 +313,22 @@ class DynamicModel(ABC):
 
         self._fit_model(self.X, self.Y)
         self.__prev_Y_size = self.Y.shape[0]
-        # Empty X and Y
-        #self.X = pd.DataFrame(columns=self.X.columns)
-        #self.Y = pd.DataFrame(columns=self.lab_columns)
+
+        if self.reset_after_update:
+            self._reset_XY()
+    
+    def _reset_XY(self):
+        self.X = pd.DataFrame(columns=self.X.columns)
+        self.Y = pd.DataFrame(columns=self.lab_columns)
+        self.__prev_Y_size = 0
 
     def update_model(self):
         """ Update the model with new data.
         This is optional, but recommended to implement
         """
         # Rescale X and Y
-        #self.X_normalizer.fit(self.X)
-        #self.Y_normalizer.fit(self.Y)
+        self.X_normalizer.fit(self.X)
+        self.Y_normalizer.fit(self.Y)
         self.X = pd.DataFrame(self.X_normalizer.transform(self.X), columns=self.X.columns)
         self.Y = pd.DataFrame(self.Y_normalizer.transform(self.Y), columns=self.lab_columns[0:2])
         print(f"Sizes after transform X,Y: {self.X.shape}, {self.Y.shape}")
@@ -325,6 +339,8 @@ class DynamicModel(ABC):
         print(f"Updating model with {X.shape} X and {Y.shape} Y")
         self.__prev_Y_size = self.Y.shape[0]
         self._update_model(X, Y)
+        if self.reset_after_update:
+            self._reset_XY()
 
 class OnlySilicaMSELoss(tf.keras.losses.Loss):
     def __init__(self, name="only_silica_mse_loss"):
@@ -341,7 +357,7 @@ class DynamicNeuralNetModel(DynamicModel):
             tf.keras.layers.Dense(2, activation='linear')
         ])
         self.model.compile(optimizer='adam', loss='mse', metrics=['mae', 'mse'])
-        super().__init__(NHOURS, update_freg_h, verbose, max_samples, self.model)
+        super().__init__(NHOURS, update_freg_h, verbose, max_samples, self.model, reset_after_update=False)
         
     def _fit_model(self, X, Y):
         """ Fit a model from the last NHOURS hours of data (including lab measures) to the next hours lab measures.
@@ -364,13 +380,13 @@ class DynamicNeuralNetModel(DynamicModel):
         This is optional, but recommended to implement
         """
         early_stop = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=2)
-        self.model.fit(X, Y, epochs=5, verbose=1, validation_data=(self.X_val, self.Y_val))
+        self.model.fit(X, Y, epochs=5, verbose=1, validation_data=(self.X_val, self.Y_val), callbacks=[early_stop])
 
 class DynamicPLSModel(DynamicModel):
     def __init__(self, NHOURS=12, update_freg_h = 24, n_components=20,verbose=0, max_samples=8000):
         self.model = PLSRegression(n_components=n_components)
         self.n_components = n_components
-        super().__init__(NHOURS, update_freg_h, verbose, max_samples, self.model)
+        super().__init__(NHOURS, update_freg_h, verbose, max_samples, self.model, reset_after_update=False)
         
     def _fit_model(self, X, Y):
         """ Fit a model from the last NHOURS hours of data (including lab measures) to the next hours lab measures.
@@ -390,21 +406,118 @@ class DynamicPLSModel(DynamicModel):
         Y = self.Y
         self._fit_model(X, Y)
 
+    def _dimension_reduction(self, X):
+        base_cols = self.Y_received.columns.values.tolist() + self.X_received.columns.values.tolist()
+        X_columns = self.X_full_columns
+        reduction = heuristic_dimension_reduction(X, self.NHOURS, base_columns=base_cols, X_columns=X_columns)
+        return reduction
 
+def heuristic_dimension_reduction(X, nhours, base_columns = None, X_columns = None):
+    """ Takes in a dataframe X which contains 180*19*NHOURS + NHOURS*4 columns,
+    and returns a dataframe of X with reduced dimensionality and new column names.
 
+    The dimension is reduced by calculating the mean, std, min and max for each sensor column over the past NHOURS hours.
+    """
+    if base_columns is None:
+        # If we do not receive columns, lets try to split at '_' and take the unique columns in order
+        base_columns = [col.split("_")[0] for col in X.columns]
+        base_columns = list(set(base_columns))
+        print(f"No base columns received, using {base_columns}")
+
+    sensor_cols = X_columns[4*nhours:]
+    lab_cols = X_columns[:4*nhours]
+
+    sensor_base_cols = base_columns[4:]
+    lab_base_cols = base_columns[:4]
+
+    #print(f"Sensor columns: {sensor_cols}")
+    #print(f"Lab columns: {lab_cols}")
+    #print(f"Sensor base columns: {sensor_base_cols}")
+    #print(f"Lab base columns: {lab_base_cols}")
+
+    # if the received dataframe is empty, return an empty dataframe but with the correct columns
+    if X.shape[0] == 0:
+        sensor_cols = []
+        for col in sensor_base_cols:
+            sensor_cols += [f"{col}_mean", f"{col}_std", f"{col}_min", f"{col}_max"]
+        cols = lab_base_cols + sensor_cols
+        return pd.DataFrame(columns=cols)
+
+    # To get all the values of each sensor column, we need to reshape the dataframe
+    sensor_data = X[sensor_cols]
+    #print(sensor_data)
+    lab_data = X[lab_cols]
+
+    heuristically_reduced_sensor_data = pd.DataFrame()
+
+    # From each row, we want a dataframe with 19 columns, and 180*NHOURS rows
+    for rowidx in range(X.shape[0]):
+        row = sensor_data.iloc[rowidx, :]
+        #print(f"Row {rowidx} of {X.shape}")
+        #print(f"Sensor data row: {row}")
+        # Reshape the row to a dataframe with only the base sensor columns,
+        # i.e. chunks of 19 columns are put on a new row
+        as_received_sensor_data = pd.DataFrame()
+        for colidx, col in enumerate(sensor_base_cols):
+            column_data = row.iloc[colidx::len(sensor_base_cols)]
+            #print(f"Col: {col}, colidx: {colidx}")
+            #print(f"Column data: {column_data}")
+            as_received_sensor_data[col] = row.iloc[colidx::len(sensor_base_cols)].values
+        #print(f"as_received_sensor_data:\n{as_received_sensor_data}")
+        # Then take one hour of data, and calculate the mean, std, min and max for each sensor column
+        # This gives us 4 columns for each sensor column for each hour, so a total of 4*19*NHOURS columns
+        for rowidx_2 in range(0, as_received_sensor_data.shape[0], 180):
+            nhour_from_row = rowidx_2 // 180
+            # Take one hour of data
+            hour_data = as_received_sensor_data.iloc[rowidx_2:rowidx_2+180, :]
+            for col in hour_data.columns:
+                # Calculate the mean, std, min and max for each sensor column
+                heuristically_reduced_sensor_data.loc[3*rowidx+ nhour_from_row, f"{col}_mean"] = hour_data[col].mean()
+                heuristically_reduced_sensor_data.loc[3*rowidx+ nhour_from_row, f"{col}_std"] = hour_data[col].std()
+                heuristically_reduced_sensor_data.loc[3*rowidx+ nhour_from_row, f"{col}_min"] = hour_data[col].min()
+                heuristically_reduced_sensor_data.loc[3*rowidx+ nhour_from_row, f"{col}_max"] = hour_data[col].max()
+    
+    #print(f"Heuristically reduced sensor data: {heuristically_reduced_sensor_data}")
+    # Now, we still need to take nhours rows of dimension reduced sensor data, concatenate them
+    # Finally, add all the lab data from the correspondig row of X
+    # Not in windows!, but by skipping nhours rows at a time
+    timeseries_sensor_data_labels = []
+    for lag in range(nhours):
+        timeseries_sensor_data_labels += [f"{col}_lag{nhours-lag}" for col in heuristically_reduced_sensor_data.columns]
+    #print(f"Timeseries sensor data labels: {timeseries_sensor_data_labels}")
+    reduced_X = pd.DataFrame(columns=timeseries_sensor_data_labels + lab_data.columns.values.tolist())
+    for first_hour in range(0,heuristically_reduced_sensor_data.shape[0],nhours):
+        #print(f"First hour: {first_hour}")
+        first_hour = first_hour // nhours
+
+        # Take nhours rows of dimension reduced sensor data
+        reduced_sensor_data = heuristically_reduced_sensor_data.iloc[first_hour:first_hour+nhours, :]
+        # Flatten the data
+        reduced_sensor_data = reduced_sensor_data.values.flatten()
+        #print(f"Reduced sensor data: {reduced_sensor_data}")
+
+        # Take the corresponding nhours rows of lab data
+        reduced_lab_data = lab_data.iloc[first_hour, :]
+        #print(f"Reduced lab data: {reduced_lab_data}")
+
+        # Concatenate the two
+        reduced_X.loc[first_hour, :] = np.concatenate([reduced_sensor_data, reduced_lab_data], axis=0)
+    #print(f"Reduced X:\n{reduced_X}")
+    return reduced_X
+    
 if __name__ == "__main__":
     df = load_to_dataframe("miningdata/data.csv", remove_first_days=True)
     #dm = DynamicNeuralNetModel(NHOURS=6, update_freg_h=24, verbose=1,max_samples=6000)
     dm = DynamicPLSModel(NHOURS=3, update_freg_h=24, verbose=1,max_samples=6000, n_components=12)
     
-    prefit_df = df.iloc[:180*24*120, :]
+    prefit_df = df.iloc[:180*24*60, :]
     pre_fit_lab_data = prefit_df[dm.lab_columns][::180]
     pre_fit_sensor_data = prefit_df.drop(labels=dm.lab_columns + ["date"], axis=1)
     assert 180*pre_fit_lab_data.shape[0] == pre_fit_sensor_data.shape[0], f"Wrong number of rows: pre_fit_lab_data: {pre_fit_lab_data.shape[0]}, pre_fit_sensor_data: {pre_fit_sensor_data.shape[0]}"
 
     dm.pre_fit(pre_fit_sensor_data, pre_fit_lab_data, hour_skips=5)
 
-    df = df.iloc[180*24*120:, :]
+    df = df.iloc[180*24*60:, :]
     
     print(f"Pre-fitting done, dynamically fitting model with {df.shape} rows")
     # Lab data is measured every hour, so we only need every 180th row
@@ -420,7 +533,7 @@ if __name__ == "__main__":
     
     # When a DynamicModel is used in it's actual setting, K=1
     # When we want to test the model, we can use a larger K (multiple of 180), to go through the data faster
-    K = 180*6
+    K = 180
     STEP_SIZE = K
 
     total_windows = len(df) - K + 1
