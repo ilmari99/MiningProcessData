@@ -103,8 +103,9 @@ class DynamicModel(ABC):
         return super().__getattribute__(__name)
         
     def pre_fit(self, sensor_data, lab_data, hour_skips=0):
-        """ Fit the model on some initial data, for example the first 2 months of data.
-        hour_skips: int, the number of hours to skip between each X and Y pair.
+        """
+        Fit the model on some initial data, for example the first 2 months of data.
+        Also sets the X, Y and X_received, Y_received dataframes.
         """
         self.X_received = sensor_data
         self.Y_received = lab_data
@@ -117,7 +118,9 @@ class DynamicModel(ABC):
         self.fit_model()
         
     def _set_predictive_dataframes(self):
-        """ Set the columns of X and Y.
+        """ Set the columns of X and Y, i.e. the predictive dataframes.
+        First, the columns are calculated, after which the dataframes are initialized, and finally a possible dimensionality reduction is applied.
+        The dimensionality reduction should return an empty dataframe with the correct column names if the input dataframe is empty.
         """
         nrows = 180 * self.NHOURS
         sensor_columns = []
@@ -177,6 +180,11 @@ class DynamicModel(ABC):
         
     def _data_to_predictive_data(self, sensor_data, lab_data, include_labels = False,hour_skips=0):
         """ Convert two dataframes of sensor and lab data to the format used by the predictive model.
+        SERGIO:
+        This takes in a block of sensor data, and a block of lab data, and flattens them.
+        
+        If include_labels is True, then lab data will have data from NHOURS+1, so that we can label the data.
+        
         """
         pred_df = pd.DataFrame(columns=self.X.columns)
         target_df = pd.DataFrame(columns=self.lab_columns[0:2])
@@ -185,19 +193,23 @@ class DynamicModel(ABC):
         # Concatenate the two, and the flattened row to a new dataframe, with self.X.columns
         assert len(sensor_data) >= 180*self.NHOURS, f"Wrong number of rows: {len(sensor_data)}"
         assert len(lab_data) >= self.NHOURS+1 if include_labels else self.NHOURS, f"Wrong number of rows: {len(lab_data)}"
-        #if include_labels:
-        #    assert len(sensor_data) == 181*len(lab_data), f"Wrong number of rows: sensor_data: {len(sensor_data)}, lab_data: {len(lab_data)}"
+        
         total_windows = len(sensor_data) - 180*self.NHOURS + 1
+        
         # If sensor_data is exactly 180*(NHOURS-1) rows, then we take all the data in a single window
         for i in range(0,len(sensor_data) - 180*self.NHOURS + 1,max(hour_skips*180,1)):
+            
             # Print progress every 10% of the way
             if total_windows > 10 and i % 10000 == 0:
                 print(f"Window {i} of {total_windows}")
+                
             # Take a window of NHOURS*180 rows of sensor data
             past_sensor_data = sensor_data.iloc[i:i+180*self.NHOURS, :]
+            
             # Take the corresponding NHOURS rows of lab data
             nth_hour = i // 180
             past_lab_data = lab_data.iloc[nth_hour:nth_hour+self.NHOURS, :]
+            
             # Label if include_labels is True
             if include_labels:
                 next_hour_lab_data = lab_data.iloc[nth_hour+self.NHOURS : nth_hour+self.NHOURS + 1, 0:2]
@@ -211,7 +223,10 @@ class DynamicModel(ABC):
             past_nhours = np.concatenate([past_lab_flattened, past_sensor_data_flattened], axis=0)
             past_nhours = pd.DataFrame(past_nhours.reshape(1, -1), columns=self.X_full_columns)
             pred_df = pd.concat([pred_df, past_nhours], axis=0, ignore_index=True)
+        
+        # Apply a dimension reduction to the _flattened_ data
         pred_df = self._dimension_reduction(pred_df)
+        
         if include_labels:
             return pred_df, target_df
         return pred_df
@@ -381,6 +396,13 @@ class DynamicNeuralNetModel(DynamicModel):
         """
         early_stop = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=2)
         self.model.fit(X, Y, epochs=5, verbose=1, validation_data=(self.X_val, self.Y_val), callbacks=[early_stop])
+        
+    def _dimension_reduction(self, X):
+        return X
+        base_cols = self.Y_received.columns.values.tolist() + self.X_received.columns.values.tolist()
+        X_columns = self.X_full_columns
+        reduction = heuristic_dimension_reduction(X, self.NHOURS, base_columns=base_cols, X_columns=X_columns)
+        return reduction
 
 class DynamicPLSModel(DynamicModel):
     def __init__(self, NHOURS=12, update_freg_h = 24, n_components=20,verbose=0, max_samples=8000):
@@ -507,8 +529,8 @@ def heuristic_dimension_reduction(X, nhours, base_columns = None, X_columns = No
     
 if __name__ == "__main__":
     df = load_to_dataframe("miningdata/data.csv", remove_first_days=True)
-    #dm = DynamicNeuralNetModel(NHOURS=6, update_freg_h=24, verbose=1,max_samples=6000)
-    dm = DynamicPLSModel(NHOURS=3, update_freg_h=24, verbose=1,max_samples=6000, n_components=12)
+    dm = DynamicNeuralNetModel(NHOURS=8, update_freg_h=24, verbose=1,max_samples=6000)
+    #dm = DynamicPLSModel(NHOURS=3, update_freg_h=24, verbose=1,max_samples=6000, n_components=12)
     
     prefit_df = df.iloc[:180*24*60, :]
     pre_fit_lab_data = prefit_df[dm.lab_columns][::180]
