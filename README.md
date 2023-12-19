@@ -1,5 +1,9 @@
 # Dynamic soft sensor for silica concentration
 
+
+See the [report](report.pdf) for a more detailed description of the project.
+
+
 In this project we were tasked to develop a soft sensor for estimating the output silica concentration of a [froth flotation](https://www.sciencedirect.com/topics/earth-and-planetary-sciences/flotation-froth#:~:text=Froth%20flotation%20is%20a%20physicochemical,17) process. This is an important problem, since silica concentrate can not be measured automatically, this allows plant operators to better optimize the process by getting real time estimates of the silica concentration.
 
 We were instructed to use dynamic linear models, that update their coefficients regularly during operation to adapt to quickly changing dynamics of the process.
